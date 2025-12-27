@@ -1,3 +1,60 @@
+function Get-WindowHandleByPID {
+    <#
+    .SYNOPSIS
+        Finds window handle(s) for a process ID using EnumWindows.
+    
+    .PARAMETER ProcessId
+        Process ID to search for.
+    
+    .OUTPUTS
+        Array of IntPtr window handles matching the PID.
+    #>
+    param([int]$ProcessId)
+    
+    # Add complete WindowEnumerator class if not already loaded
+    if (-not ([System.Management.Automation.PSTypeName]'WindowEnumerator').Type) {
+        $code = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public class WindowEnumerator {
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+    
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    
+    public static List<IntPtr> GetWindowsForProcess(int processId) {
+        List<IntPtr> windows = new List<IntPtr>();
+        
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+            uint pid = 0;
+            GetWindowThreadProcessId(hWnd, out pid);
+            
+            if (pid == processId && IsWindowVisible(hWnd)) {
+                windows.Add(hWnd);
+            }
+            
+            return true;
+        }, IntPtr.Zero);
+        
+        return windows;
+    }
+}
+'@
+        Add-Type -TypeDefinition $code
+    }
+    
+    $windowList = [WindowEnumerator]::GetWindowsForProcess($ProcessId)
+    return $windowList.ToArray()
+}
+
 function Set-WindowPosition {
     <#
     .SYNOPSIS
@@ -83,6 +140,17 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
 
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+[DllImport("user32.dll")]
+public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+[DllImport("user32.dll")]
+public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+[DllImport("user32.dll")]
+public static extern bool IsWindowVisible(IntPtr hWnd);
+
+public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 '@
     
     # Add type if not already loaded
@@ -97,9 +165,19 @@ public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
             $process = Get-Process -Id $ProcessId -ErrorAction Stop
             $hwnd = $process.MainWindowHandle
             
+            # If MainWindowHandle is zero, use EnumWindows to find it
             if ($hwnd -eq [IntPtr]::Zero) {
-                Write-Warning "Process $ProcessId does not have a main window handle"
-                return $false
+                Write-Verbose "MainWindowHandle is zero for PID $ProcessId, using EnumWindows..."
+                $handles = Get-WindowHandleByPID -ProcessId $ProcessId
+                
+                if ($handles.Count -eq 0) {
+                    Write-Warning "Process $ProcessId has no visible windows"
+                    return $false
+                }
+                
+                # Use first visible window
+                $hwnd = $handles[0]
+                Write-Verbose "Found window handle via EnumWindows: $hwnd (total: $($handles.Count) windows)"
             }
         }
         catch {

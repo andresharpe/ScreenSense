@@ -22,9 +22,19 @@ function New-PositionedPowerShell {
     .PARAMETER Title
         Window title (used for identification and user reference).
     
+    .PARAMETER HostMode
+        Window hosting mode. Options:
+        - Auto: Try standard launch, fall back to ConHost if needed (default)
+        - ConHost: Force classic console window via cmd.exe (most reliable)
+        - Direct: Launch pwsh.exe directly without fallback
+    
     .EXAMPLE
         New-PositionedPowerShell -Screen 0 -Position LeftHalf
         Opens PowerShell in left half of primary screen
+    
+    .EXAMPLE
+        New-PositionedPowerShell -Screen 0 -Position Full -HostMode ConHost
+        Forces classic console window for reliable positioning
     
     .EXAMPLE
         New-PositionedPowerShell -Screen 2 -Position RightTopThird -WorkingDirectory "C:\Projects" -Command "dotnet run"
@@ -59,13 +69,22 @@ function New-PositionedPowerShell {
         [object]$Command,
         
         [Parameter(Mandatory = $false)]
-        [string]$Title = "PowerShell"
+        [string]$Title = "PowerShell",
+        
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Auto', 'ConHost', 'Direct')]
+        [string]$HostMode = 'Auto'
     )
     
     # Load required functions
     $scriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
     . "$scriptPath\Get-DockingRegion.ps1"
     . "$scriptPath\Set-WindowPosition.ps1"
+    
+    # Generate unique window title token to avoid ambiguity
+    $token = (New-Guid).ToString('N').Substring(0, 8)
+    $effectiveTitle = "$Title [SS-$token]"
+    Write-Verbose "Unique window title: $effectiveTitle"
     
     # Get target coordinates
     try {
@@ -79,12 +98,16 @@ function New-PositionedPowerShell {
     # Build command string for pwsh.exe
     $commandString = ""
     
-    # Set window title first
-    $commandString += "`$host.ui.RawUI.WindowTitle = '$Title'; "
+    # Escape single quotes in strings for PowerShell
+    $escapedTitle = $effectiveTitle -replace "'", "''"
+    $escapedWorkingDir = if ($WorkingDirectory) { $WorkingDirectory -replace "'", "''" } else { $null }
+    
+    # Set window title first (using unique title)
+    $commandString += "`$host.ui.RawUI.WindowTitle = '$escapedTitle'; "
     
     # Change directory if specified
-    if ($WorkingDirectory) {
-        $commandString += "Set-Location '$WorkingDirectory'; "
+    if ($escapedWorkingDir) {
+        $commandString += "Set-Location '$escapedWorkingDir'; "
     }
     
     # Add user commands
@@ -109,14 +132,46 @@ function New-PositionedPowerShell {
     }
     
     # Launch PowerShell
-    Write-Verbose "Launching PowerShell with title '$Title'"
+    Write-Verbose "Launching PowerShell with title '$effectiveTitle', mode: $HostMode"
     Write-Verbose "Command: $commandString"
     
     try {
-        $process = Start-Process -FilePath "pwsh.exe" `
-            -ArgumentList $pwshArgs `
-            -PassThru `
-            -WindowStyle Normal
+        # Choose launch method based on HostMode
+        if ($HostMode -eq 'ConHost') {
+            # Force classic console window via cmd.exe start
+            # This creates a separate conhost.exe window that we can reliably position
+            $cmdArgs = @("/c", "start", "`"$escapedTitle`"", "pwsh.exe") + $pwshArgs
+            Write-Verbose "Using ConHost mode: cmd.exe $($cmdArgs -join ' ')"
+            
+            $process = Start-Process -FilePath "cmd.exe" `
+                -ArgumentList $cmdArgs `
+                -PassThru `
+                -WindowStyle Normal
+            
+            # With cmd /c start, we need to wait and find the pwsh process
+            Start-Sleep -Milliseconds 500
+            
+            # Find the pwsh process by title (most recently created)
+            $pwshProcesses = Get-Process pwsh -ErrorAction SilentlyContinue | 
+                Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-5) } | 
+                Sort-Object StartTime -Descending
+            
+            if ($pwshProcesses) {
+                $process = $pwshProcesses[0]
+                Write-Verbose "Found pwsh process: PID $($process.Id)"
+            }
+            else {
+                Write-Warning "Could not find launched pwsh process"
+                return $null
+            }
+        }
+        else {
+            # Direct launch or Auto mode
+            $process = Start-Process -FilePath "pwsh.exe" `
+                -ArgumentList $pwshArgs `
+                -PassThru `
+                -WindowStyle Normal
+        }
         
         if (-not $process) {
             Write-Error "Failed to start PowerShell process"
@@ -146,39 +201,64 @@ function New-PositionedPowerShell {
         }
         
         if ($hwnd -eq [IntPtr]::Zero) {
-            # Try finding window by title as fallback
-            Write-Verbose "Trying to find window by title..."
+            Write-Verbose "MainWindowHandle is zero, attempting EnumWindows resolution..."
             
-            # Load Win32 API if not already loaded (for FindWindow)
-            if (-not ([System.Management.Automation.PSTypeName]'Win32.User32').Type) {
-                $signature = @'
+            # Ensure Set-WindowPosition is loaded (provides Get-WindowHandleByPID)
+            . "$scriptPath\Set-WindowPosition.ps1"
+            
+            # Try EnumWindows first (most reliable for console windows)
+            $handles = Get-WindowHandleByPID -ProcessId $process.Id
+            
+            if ($handles.Count -gt 0) {
+                $hwnd = $handles[0]
+                Write-Verbose "Found $($handles.Count) window(s) via EnumWindows, using first: $hwnd"
+            }
+            else {
+                Write-Verbose "No windows found via EnumWindows, trying FindWindow by title..."
+                
+                # Fallback: Try finding window by unique title
+                if (-not ([System.Management.Automation.PSTypeName]'Win32.User32').Type) {
+                    $signature = @'
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 '@
-                Add-Type -MemberDefinition $signature -Name User32 -Namespace Win32
+                    Add-Type -MemberDefinition $signature -Name User32 -Namespace Win32
+                }
+                
+                # Give title time to be set
+                Start-Sleep -Milliseconds 200
+                $hwnd = [Win32.User32]::FindWindow($null, $effectiveTitle)
+                
+                if ($hwnd -ne [IntPtr]::Zero) {
+                    Write-Verbose "Found window by title: $effectiveTitle"
+                }
             }
             
-            $hwnd = [Win32.User32]::FindWindow($null, $Title)
-            
+            # Final diagnostic if still no handle
             if ($hwnd -eq [IntPtr]::Zero) {
-                Write-Warning "Could not get window handle for process $($process.Id). Window positioning skipped."
+                $parentProc = (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)?.Parent
+                Write-Warning @"
+Could not get window handle for process $($process.Id).
+Parent process: $(if ($parentProc) { "$($parentProc.ProcessName) (PID $($parentProc.Id))" } else { "Unknown" })
+Attempted: MainWindowHandle, EnumWindows, FindWindow by title
+
+This may indicate the process is hosted in a terminal emulator without its own window.
+Consider using -HostMode ConHost parameter (when implemented) for more reliable window creation.
+"@
                 return $process
-            }
-            else {
-                Write-Verbose "Found window by title"
             }
         }
         
         Write-Verbose "Window handle obtained: $hwnd"
         
-        # Position the window
+        # Position the window using the handle we found
         $positionSuccess = $false
         
         if ($Position -eq 'Maximized') {
-            $positionSuccess = Set-WindowPosition -ProcessId $process.Id -Maximize
+            $positionSuccess = Set-WindowPosition -WindowHandle $hwnd -Maximize
         }
         else {
-            $positionSuccess = Set-WindowPosition -ProcessId $process.Id `
+            $positionSuccess = Set-WindowPosition -WindowHandle $hwnd `
                 -X $region.X `
                 -Y $region.Y `
                 -Width $region.Width `
