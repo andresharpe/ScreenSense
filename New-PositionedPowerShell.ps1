@@ -212,22 +212,30 @@ function New-PositionedPowerShell {
             if ($handles.Count -gt 0) {
                 $hwnd = $handles[0]
                 Write-Verbose "Found $($handles.Count) window(s) via EnumWindows, using first: $hwnd"
+                
+                # Verify which PID owns this window
+                if (-not ([System.Management.Automation.PSTypeName]'ScreenSense.User32').Type) {
+                    . "$scriptPath\Set-WindowPosition.ps1"
+                }
+                
+                $ownerPid = 0
+                [ScreenSense.User32]::GetWindowThreadProcessId($hwnd, [ref]$ownerPid) | Out-Null
+                if ($ownerPid -ne $process.Id) {
+                    Write-Warning "Window $hwnd is owned by PID $ownerPid, not $($process.Id). This may indicate process tree issues."
+                }
+                else {
+                    Write-Verbose "Confirmed window $hwnd is owned by PID $($process.Id)"
+                }
             }
             else {
                 Write-Verbose "No windows found via EnumWindows, trying FindWindow by title..."
                 
-                # Fallback: Try finding window by unique title
-                if (-not ([System.Management.Automation.PSTypeName]'Win32.User32').Type) {
-                    $signature = @'
-[DllImport("user32.dll", CharSet = CharSet.Unicode)]
-public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-'@
-                    Add-Type -MemberDefinition $signature -Name User32 -Namespace Win32
-                }
+                # Ensure ScreenSense.User32 is loaded for FindWindow
+                . "$scriptPath\Set-WindowPosition.ps1"
                 
                 # Give title time to be set
                 Start-Sleep -Milliseconds 200
-                $hwnd = [Win32.User32]::FindWindow($null, $effectiveTitle)
+                $hwnd = [ScreenSense.User32]::FindWindow($null, $effectiveTitle)
                 
                 if ($hwnd -ne [IntPtr]::Zero) {
                     Write-Verbose "Found window by title: $effectiveTitle"
