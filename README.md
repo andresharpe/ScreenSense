@@ -8,11 +8,25 @@ Detect your physical workspace and automatically launch window layouts based on 
 - **Launches positioned windows** - Opens PowerShell windows in specific screen regions with custom commands
 - **Workspace automation** - Define YAML configs for different locations (home, office, etc.) that launch automatically
 
+## Installation
+
+### Option 1: Import as Module (Recommended)
+```powershell
+Import-Module .\ScreenSense.psd1
+```
+
+### Option 2: Use Individual Scripts
+Scripts are in the `src/` folder and can be dot-sourced:
+```powershell
+. .\src\New-PositionedPowerShell.ps1
+```
+
 ## Quick Start
 
 ### 1. Get your screen fingerprint
 ```powershell
-.\Get-ScreensFingerprint.ps1
+Get-ScreensFingerprint
+# or: .\src\Get-ScreensFingerprint.ps1
 ```
 
 **Example output:**
@@ -28,7 +42,7 @@ Screens:
 
 ### 2. Create a workspace config
 
-Copy `workspace.example.yml` to `workspace.yml` and update with your fingerprint and desired window layout.
+Copy `examples/workspace.example.yml` to `workspace.yml` and update with your fingerprint and desired window layout.
 
 ```yaml
 workspaces:
@@ -53,7 +67,8 @@ workspaces:
 
 ### 3. Launch your workspace
 ```powershell
-.\Start-ScreenSenseWorkspace.ps1
+Start-ScreenSenseWorkspace
+# or: .\src\Start-ScreenSenseWorkspace.ps1
 ```
 
 All windows launch automatically in their configured positions!
@@ -81,32 +96,52 @@ Instead of coordinates, use intuitive region names:
 **Special:**
 - `Full`, `Center`, `Maximized`
 
+## Project Structure
+
+```
+ScreenSense/
+├── ScreenSense.psm1          # Main module file
+├── ScreenSense.psd1          # Module manifest
+├── README.md
+├── src/                      # Core functionality
+│   ├── Get-DockingRegion.ps1
+│   ├── Get-ScreensFingerprint.ps1
+│   ├── New-PositionedPowerShell.ps1
+│   ├── Set-WindowPosition.ps1
+│   └── Start-ScreenSenseWorkspace.ps1
+├── tests/                    # Test scripts
+│   ├── Test-CleanWindowLaunch.ps1
+│   └── Test-ScreenSenseWindowMove.ps1
+├── examples/                 # Example configurations
+│   └── workspace.example.yml
+└── docs/                     # Documentation
+```
+
 ## Commands
 
 ### Get-ScreensFingerprint
 Get current screen configuration and fingerprint.
 ```powershell
-.\Get-ScreensFingerprint.ps1
+Get-ScreensFingerprint
 ```
 
 ### New-PositionedPowerShell
 Launch a single PowerShell window in a specific position.
 ```powershell
-. .\New-PositionedPowerShell.ps1
-New-PositionedPowerShell -Screen 0 -Position LeftHalf -WorkingDirectory "C:\\Projects" -Command "dotnet run"
+New-PositionedPowerShell -Screen 0 -Position LeftHalf -WorkingDirectory "C:\Projects" -Command "dotnet run"
 ```
 
 ### Start-ScreenSenseWorkspace
 Launch entire workspace from config file.
 ```powershell
 # Launch all windows for current fingerprint
-.\Start-ScreenSenseWorkspace.ps1
+Start-ScreenSenseWorkspace
 
 # Launch specific window only
-.\Start-ScreenSenseWorkspace.ps1 -WindowName "Frontend Dev"
+Start-ScreenSenseWorkspace -WindowName "Frontend Dev"
 
 # Use different config file
-.\Start-ScreenSenseWorkspace.ps1 -ConfigFile "my-workspace.yml"
+Start-ScreenSenseWorkspace -ConfigFile "my-workspace.yml"
 ```
 
 ## Requirements

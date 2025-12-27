@@ -76,10 +76,15 @@ function New-PositionedPowerShell {
         [string]$HostMode = 'Auto'
     )
     
-    # Load required functions
+    # Load required functions (all in same src directory)
     $scriptPath = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
+    
+    # Initialize Win32 types first (needed for FindWindow, GetWindowThreadProcessId, etc.)
+    . "$scriptPath\Initialize-ScreenSenseTypes.ps1"
+    
     . "$scriptPath\Get-DockingRegion.ps1"
     . "$scriptPath\Set-WindowPosition.ps1"
+    . "$scriptPath\Find-WindowByTitle.ps1"
     
     # Generate unique window title token to avoid ambiguity
     $token = (New-Guid).ToString('N').Substring(0, 8)
@@ -120,17 +125,6 @@ function New-PositionedPowerShell {
         }
     }
     
-    # Build pwsh.exe arguments
-    $pwshArgs = @(
-        '-NoLogo'
-        '-NoExit'
-    )
-    
-    if ($commandString) {
-        $pwshArgs += '-Command'
-        $pwshArgs += $commandString
-    }
-    
     # Launch PowerShell
     Write-Verbose "Launching PowerShell with title '$effectiveTitle', mode: $HostMode"
     Write-Verbose "Command: $commandString"
@@ -139,9 +133,19 @@ function New-PositionedPowerShell {
         # Choose launch method based on HostMode
         if ($HostMode -eq 'ConHost') {
             # Force classic console window via cmd.exe start
-            # This creates a separate conhost.exe window that we can reliably position
+            # Use -EncodedCommand to avoid escaping issues with cmd.exe
+            $commandBytes = [System.Text.Encoding]::Unicode.GetBytes($commandString)
+            $encodedCommand = [Convert]::ToBase64String($commandBytes)
+            
+            $pwshArgs = @(
+                '-NoLogo'
+                '-NoExit'
+                '-EncodedCommand'
+                $encodedCommand
+            )
+            
             $cmdArgs = @("/c", "start", "`"$escapedTitle`"", "pwsh.exe") + $pwshArgs
-            Write-Verbose "Using ConHost mode: cmd.exe $($cmdArgs -join ' ')"
+            Write-Verbose "Using ConHost mode with EncodedCommand"
             
             $process = Start-Process -FilePath "cmd.exe" `
                 -ArgumentList $cmdArgs `
@@ -149,11 +153,11 @@ function New-PositionedPowerShell {
                 -WindowStyle Normal
             
             # With cmd /c start, we need to wait and find the pwsh process
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Milliseconds 800
             
             # Find the pwsh process by title (most recently created)
             $pwshProcesses = Get-Process pwsh -ErrorAction SilentlyContinue | 
-                Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-5) } | 
+                Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-10) } | 
                 Sort-Object StartTime -Descending
             
             if ($pwshProcesses) {
@@ -166,7 +170,17 @@ function New-PositionedPowerShell {
             }
         }
         else {
-            # Direct launch or Auto mode
+            # Direct launch or Auto mode - use -Command instead
+            $pwshArgs = @(
+                '-NoLogo'
+                '-NoExit'
+            )
+            
+            if ($commandString) {
+                $pwshArgs += '-Command'
+                $pwshArgs += $commandString
+            }
+            
             $process = Start-Process -FilePath "pwsh.exe" `
                 -ArgumentList $pwshArgs `
                 -PassThru `
@@ -180,11 +194,12 @@ function New-PositionedPowerShell {
         
         Write-Verbose "Process started with PID $($process.Id)"
         
-        # Initial delay to let process initialize
-        Start-Sleep -Milliseconds 200
+        # Initial delay to let process and window initialize
+        # ConHost mode needs more time as cmd.exe spawns pwsh.exe which then creates console
+        Start-Sleep -Milliseconds 500
         
-        # Wait for window to be created
-        $maxAttempts = 30
+        # Wait for window to be created - try MainWindowHandle first
+        $maxAttempts = 50
         $attempt = 0
         $hwnd = [IntPtr]::Zero
         
@@ -194,7 +209,18 @@ function New-PositionedPowerShell {
             $hwnd = $process.MainWindowHandle
             
             if ($hwnd -ne [IntPtr]::Zero) {
+                Write-Verbose "MainWindowHandle resolved after $($attempt * 100)ms"
                 break
+            }
+            
+            # After 1 second, also try EnumWindows in parallel
+            if ($attempt -gt 10) {
+                $handles = Get-WindowHandleByPID -ProcessId $process.Id
+                if ($handles.Count -gt 0) {
+                    $hwnd = $handles[0]
+                    Write-Verbose "EnumWindows found handle after $($attempt * 100)ms"
+                    break
+                }
             }
             
             $attempt++
@@ -213,11 +239,7 @@ function New-PositionedPowerShell {
                 $hwnd = $handles[0]
                 Write-Verbose "Found $($handles.Count) window(s) via EnumWindows, using first: $hwnd"
                 
-                # Verify which PID owns this window
-                if (-not ([System.Management.Automation.PSTypeName]'ScreenSense.User32').Type) {
-                    . "$scriptPath\Set-WindowPosition.ps1"
-                }
-                
+                # Verify which PID owns this window (type should be loaded at this point)
                 $ownerPid = 0
                 [ScreenSense.User32]::GetWindowThreadProcessId($hwnd, [ref]$ownerPid) | Out-Null
                 if ($ownerPid -ne $process.Id) {
@@ -228,17 +250,39 @@ function New-PositionedPowerShell {
                 }
             }
             else {
-                Write-Verbose "No windows found via EnumWindows, trying FindWindow by title..."
+                Write-Verbose "No windows found via EnumWindows for pwsh PID"
                 
-                # Ensure ScreenSense.User32 is loaded for FindWindow
-                . "$scriptPath\Set-WindowPosition.ps1"
+                # In ConHost mode, the window might be owned by conhost.exe, not pwsh.exe
+                # Try to find conhost processes that started around the same time
+                if ($HostMode -eq 'ConHost') {
+                    Write-Verbose "Searching for conhost.exe windows (ConHost mode)..."
+                    $conhostProcesses = Get-Process conhost -ErrorAction SilentlyContinue | 
+                        Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-10) } | 
+                        Sort-Object StartTime -Descending
+                    
+                    foreach ($conhost in $conhostProcesses) {
+                        $conhostHandles = Get-WindowHandleByPID -ProcessId $conhost.Id
+                        if ($conhostHandles.Count -gt 0) {
+                            $hwnd = $conhostHandles[0]
+                            Write-Verbose "Found conhost window: PID $($conhost.Id), HWND $hwnd"
+                            break
+                        }
+                    }
+                }
                 
-                # Give title time to be set
-                Start-Sleep -Milliseconds 200
-                $hwnd = [ScreenSense.User32]::FindWindow($null, $effectiveTitle)
-                
-                if ($hwnd -ne [IntPtr]::Zero) {
-                    Write-Verbose "Found window by title: $effectiveTitle"
+                # Final attempt: enumerate all windows and search by title pattern
+                if ($hwnd -eq [IntPtr]::Zero) {
+                    Write-Verbose "Final attempt: searching all windows by title pattern..."
+                    
+                    for ($titleAttempt = 0; $titleAttempt -lt 20; $titleAttempt++) {
+                        Start-Sleep -Milliseconds 250
+                        $hwnd = Find-WindowByTitle -TitlePattern $effectiveTitle -Exact -Verbose:$VerbosePreference
+                        
+                        if ($hwnd -ne [IntPtr]::Zero) {
+                            Write-Verbose "Found window by enumerating all windows after $($titleAttempt * 250)ms"
+                            break
+                        }
+                    }
                 }
             }
             
