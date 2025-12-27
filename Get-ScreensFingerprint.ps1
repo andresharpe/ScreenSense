@@ -1,4 +1,4 @@
-function Get-ScreenFingerprint {
+function Get-ScreensFingerprint {
     <#
     .SYNOPSIS
         Generates a fingerprint based on the current screen configuration.
@@ -9,8 +9,16 @@ function Get-ScreenFingerprint {
         physical workspace setup.
     
     .EXAMPLE
-        Get-ScreenFingerprint
-        Returns a fingerprint like "a3f5b2c1"
+        Get-ScreensFingerprint
+        Returns a PSCustomObject with Fingerprint, ScreenCount, Configuration, and Screens properties
+    
+    .EXAMPLE
+        Get-ScreensFingerprint | Select-Object -ExpandProperty Fingerprint
+        Returns just the fingerprint string
+    
+    .EXAMPLE
+        (Get-ScreensFingerprint).Screens | Format-Table
+        Displays screen details in a table
     #>
     
     # Get all monitors using WMI
@@ -64,22 +72,14 @@ function Get-ScreenFingerprint {
     }
 }
 
-# If script is run directly (not dot-sourced), execute the function
+# If script is run directly (not dot-sourced), execute the function and format output
 if ($MyInvocation.InvocationName -ne '.') {
-    $result = Get-ScreenFingerprint
+    $result = Get-ScreensFingerprint
     
-    Write-Host "`nScreen Configuration Fingerprint" -ForegroundColor Cyan
-    Write-Host "=================================" -ForegroundColor Cyan
-    Write-Host "Fingerprint: $($result.Fingerprint)" -ForegroundColor Green
-    Write-Host "Screen Count: $($result.ScreenCount)" -ForegroundColor Yellow
+    # Output the object for pipeline use
+    $result | Format-List Fingerprint, ScreenCount, Configuration
+    
+    # Display screens in a formatted way
     Write-Host "`nScreens:" -ForegroundColor Yellow
-    
-    foreach ($screen in $result.Screens) {
-        $primaryIndicator = if ($screen.Primary) { " [PRIMARY]" } else { "" }
-        Write-Host "  - $($screen.Resolution) @ $($screen.Position)$primaryIndicator" -ForegroundColor White
-        Write-Host "    Device: $($screen.DeviceName)" -ForegroundColor Gray
-    }
-    
-    Write-Host "`nConfiguration String:" -ForegroundColor Yellow
-    Write-Host "  $($result.Configuration)" -ForegroundColor Gray
+    $result.Screens | Format-Table Primary, Resolution, Position, DeviceName -AutoSize
 }

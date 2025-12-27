@@ -9,7 +9,7 @@ Generates a unique fingerprint based on your connected monitors (resolution, pos
 ## Usage
 
 ```powershell
-.\Get-ScreenFingerprint.ps1
+.\Get-ScreensFingerprint.ps1
 ```
 
 **Example output:**
