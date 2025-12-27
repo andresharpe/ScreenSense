@@ -1,0 +1,108 @@
+workspaces:
+  # Your current setup - 3 screens (ultrawide, portrait, laptop)
+  # Run Get-ScreensFingerprint.ps1 to get your fingerprint
+  eff842cf:
+    name: "Home Office - Full Stack Dev"
+    windows:
+      # Frontend dev server - top right third of ultrawide
+      - name: "Frontend Dev Server"
+        screen: 2
+        position: RightTopThird
+        workingDir: "C:\\Users\\andre\\repos\\MyApp"
+        commands:
+          - "cd frontend"
+          - "npm run dev"
+      
+      # Backend API - bottom right third of ultrawide
+      - name: "Backend API"
+        screen: 2
+        position: RightBottomThird
+        workingDir: "C:\\Users\\andre\\repos\\MyApp\\backend"
+        commands:
+          - "$env:ASPNETCORE_ENVIRONMENT='Development'"
+          - "dotnet run"
+      
+      # General terminal - full screen on laptop
+      - name: "Main Terminal"
+        screen: 0
+        position: Full
+        workingDir: "C:\\Users\\andre\\repos\\MyApp"
+      
+      # Logs terminal - top half of portrait screen
+      - name: "Logs"
+        screen: 1
+        position: TopHalf
+        workingDir: "C:\\Users\\andre\\repos\\MyApp"
+        commands:
+          - "docker logs -f myapp-db"
+
+  # Example: Work office with 2 monitors
+  a3f5b2c1:
+    name: "Work Office"
+    windows:
+      - name: "Main Dev"
+        screen: 1
+        position: LeftHalf
+        workingDir: "C:\\Projects\\WorkProject"
+      
+      - name: "Tests"
+        screen: 1
+        position: RightHalf
+        workingDir: "C:\\Projects\\WorkProject"
+        commands:
+          - "npm test -- --watch"
+      
+      - name: "Terminal"
+        screen: 0
+        position: Full
+        workingDir: "C:\\Projects\\WorkProject"
+
+  # Example: Single laptop screen
+  12345678:
+    name: "Laptop Only - Mobile"
+    windows:
+      - name: "Dev Terminal"
+        screen: 0
+        position: LeftHalf
+        workingDir: "~\\repos\\MyApp"
+      
+      - name: "Output Terminal"
+        screen: 0
+        position: RightHalf
+        workingDir: "~\\repos\\MyApp"
+        commands:
+          - "dotnet run"
+
+  # Example: Grid layout (2x3) for testing
+  demo:
+    name: "Demo Grid Layout"
+    windows:
+      - name: "Top Left"
+        screen: 0
+        position: LeftTopThird
+        workingDir: "~"
+      
+      - name: "Top Right"
+        screen: 0
+        position: RightTopThird
+        workingDir: "~"
+      
+      - name: "Middle Left"
+        screen: 0
+        position: LeftMiddleThird
+        workingDir: "~"
+      
+      - name: "Middle Right"
+        screen: 0
+        position: RightMiddleThird
+        workingDir: "~"
+      
+      - name: "Bottom Left"
+        screen: 0
+        position: LeftBottomThird
+        workingDir: "~"
+      
+      - name: "Bottom Right"
+        screen: 0
+        position: RightBottomThird
+        workingDir: "~"
